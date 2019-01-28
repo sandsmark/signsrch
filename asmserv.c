@@ -773,7 +773,7 @@ ulong Disassembleback(uchar *block,ulong base,ulong size,ulong ip,int n) {
   pdata=block+(addr-base);
   for (i=0; addr<ip; i++) {
     abuf[i%128]=addr;
-    cmdsize=Disasm(pdata,back,addr,&da,DISASM_SIZE);
+    cmdsize=olly_Disasm(pdata,back,addr,&da,DISASM_SIZE);
     pdata+=cmdsize;
     addr+=cmdsize;
     back-=cmdsize; };
@@ -795,7 +795,7 @@ ulong Disassembleforward(uchar *block,ulong base,ulong size,ulong ip,int n) {
   pdata=block+(ip-base);
   size-=(ip-base);
   for (i=0; i<n && size>0; i++) {
-    cmdsize=Disasm(pdata,size,ip,&da,DISASM_SIZE);
+    cmdsize=olly_Disasm(pdata,size,ip,&da,DISASM_SIZE);
     pdata+=cmdsize;
     ip+=cmdsize;
     size-=cmdsize; };

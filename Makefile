@@ -7,7 +7,7 @@ SRC		= $(EXE).c
 all:
 	$(CC) $(CFLAGS) -c disasm.c
 	$(CC) $(CFLAGS) -c asmserv.c
-	$(CC) $(SRC) $(CFLAGS) -o $(EXE) *.o
+	$(CC) $(SRC) $(CFLAGS) -o $(EXE) *.o -lpthread
 
 install:
 	install -m 755 -d $(BINDIR)

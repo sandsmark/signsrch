@@ -73,11 +73,11 @@ int mymemicmp(const void *buf1, const void *buf2, int count) {
 // Disassemble name of 1, 2 or 4-byte general-purpose integer register and, if
 // requested and available, dump its contents. Parameter type changes decoding
 // of contents for some operand types.
-static void DecodeRG(int index,int xdatasize,int type) {
+static void DecodeRG(int idx,int xdatasize,int type) {
   int sizeindex;
   uchar name[9];
   if (mode<DISASM_DATA) return;        // No need to decode
-  index&=0x07;
+  idx&=0x07;
   if (xdatasize==1)
     sizeindex=0;
   else if (xdatasize==2)
@@ -87,7 +87,7 @@ static void DecodeRG(int index,int xdatasize,int type) {
   else {
     da->error=DAE_INTERN; return; };
   if (mode>=DISASM_FILE) {
-    strcpy(name,regname[sizeindex][index]);
+    strcpy(name,regname[sizeindex][idx]);
     if (lowercase) mystrlwr(name);
     if (type<PSEUDOOP)                 // Not a pseudooperand
       nresult+=sprintf(da->result+nresult,"%s",name);
@@ -97,12 +97,12 @@ static void DecodeRG(int index,int xdatasize,int type) {
 
 // Disassemble name of 80-bit floating-point register and, if available, dump
 // its contents.
-static void DecodeST(int index,int pseudoop) {
+static void DecodeST(int idx,int pseudoop) {
   int i;
   uchar s[32];
   if (mode<DISASM_FILE) return;        // No need to decode
-  index&=0x07;
-  i=sprintf(s,"%s(%i)",(lowercase?"st":"ST"),index);
+  idx&=0x07;
+  i=sprintf(s,"%s(%i)",(lowercase?"st":"ST"),idx);
   if (pseudoop==0) {
     strcpy(da->result+nresult,s);
     nresult+=i;
@@ -110,22 +110,22 @@ static void DecodeST(int index,int pseudoop) {
 };
 
 // Disassemble name of 64-bit MMX register.
-static void DecodeMX(int index) {
+static void DecodeMX(int idx) {
   uchar *pr;
   if (mode<DISASM_FILE) return;        // No need to decode
-  index&=0x07;
+  idx&=0x07;
   pr=da->result+nresult;
-  nresult+=sprintf(pr,"%s%i",(lowercase?"mm":"MM"),index);
+  nresult+=sprintf(pr,"%s%i",(lowercase?"mm":"MM"),idx);
 };
 
 // Disassemble name of 64-bit 3DNow! register and, if available, dump its
 // contents.
-static void DecodeNR(int index) {
+static void DecodeNR(int idx) {
   uchar *pr;
   if (mode<DISASM_FILE) return;        // No need to decode
-  index&=0x07;
+  idx&=0x07;
   pr=da->result+nresult;
-  nresult+=sprintf(pr,"%s%i",(lowercase?"mm":"MM"),index);
+  nresult+=sprintf(pr,"%s%i",(lowercase?"mm":"MM"),idx);
 };
 
 // Service function, adds valid memory adress in MASM or Ideal format to
@@ -644,13 +644,13 @@ static void DecodeJF(void) {
 };
 
 // Decode segment register. In flat model, operands of this type are seldom.
-static void DecodeSG(int index) {
+static void DecodeSG(int idx) {
   int i;
   if (mode<DISASM_DATA) return;
-  index&=0x07;
-  if (index>=6) softerror=DAE_BADSEG;  // Undefined segment register
+  idx&=0x07;
+  if (idx>=6) softerror=DAE_BADSEG;  // Undefined segment register
   if (mode>=DISASM_FILE) {
-    i=sprintf(da->result+nresult,"%s",segname[index]);
+    i=sprintf(da->result+nresult,"%s",segname[idx]);
     if (lowercase) mystrlwr(da->result+nresult);
     nresult+=i;
   };
@@ -659,11 +659,11 @@ static void DecodeSG(int index) {
 // Decode control register addressed in R part of ModRM byte. Operands of
 // this type are extremely rare. Contents of control registers are accessible
 // only from privilege level 0, so I cannot dump them here.
-static void DecodeCR(int index) {
+static void DecodeCR(int idx) {
   hasrm=1;
   if (mode>=DISASM_FILE) {
-    index=(index>>3) & 0x07;
-    nresult+=sprintf(da->result+nresult,"%s",crname[index]);
+    idx=(idx>>3) & 0x07;
+    nresult+=sprintf(da->result+nresult,"%s",crname[idx]);
     if (lowercase) mystrlwr(da->result+nresult);
   };
 };
@@ -671,12 +671,12 @@ static void DecodeCR(int index) {
 // Decode debug register addressed in R part of ModRM byte. Operands of
 // this type are extremely rare. I can dump only those debug registers
 // available in CONTEXT structure.
-static void DecodeDR(int index) {
+static void DecodeDR(int idx) {
   int i;
   hasrm=1;
   if (mode>=DISASM_FILE) {
-    index=(index>>3) & 0x07;
-    i=sprintf(da->result+nresult,"%s",drname[index]);
+    idx=(idx>>3) & 0x07;
+    i=sprintf(da->result+nresult,"%s",drname[idx]);
     if (lowercase) mystrlwr(da->result+nresult);
     nresult+=i;
   };
@@ -757,7 +757,7 @@ int Checkcondition(int code,ulong flags) {
   else return (cond==0);               // Invert condition
 };
 
-ulong Disasm(uchar *src,ulong srcsize,ulong srcip,
+ulong olly_Disasm(uchar *src,ulong srcsize,ulong srcip,
   t_disasm *disasm,int disasmmode) {
   int i,j,isprefix,is3dnow,repeated,operand,mnemosize,arg;
   ulong u,code;

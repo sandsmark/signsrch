@@ -125,10 +125,12 @@
 #define DAE_REGISTER   5               // Memory where only register allowed
 #define DAE_INTERN     6               // Internal error
 
+#ifndef MAINPROG
 typedef unsigned char  uchar;          // Unsigned character (byte)
 typedef unsigned short ushort;         // Unsigned short
 typedef unsigned int   uint;           // Unsigned integer
 typedef unsigned long  ulong;          // Unsigned long
+#endif
 
 typedef struct t_addrdec {
   int            defseg;
@@ -323,7 +325,7 @@ int    Assemble(uchar *cmd,ulong ip,t_asmmodel *model,int attempt,
          int constsize,uchar *errtext);
 int    Checkcondition(int code,ulong flags);
 int    Decodeaddress(ulong addr,uchar *symb,int nsymb,uchar *comment);
-ulong  Disasm(uchar *src,ulong srcsize,ulong srcip,
+ulong  olly_Disasm(uchar *src,ulong srcsize,ulong srcip,
          t_disasm *disasm,int disasmmode);
 ulong  Disassembleback(uchar *block,ulong base,ulong size,ulong ip,int n);
 ulong  Disassembleforward(uchar *block,ulong base,ulong size,ulong ip,int n);
