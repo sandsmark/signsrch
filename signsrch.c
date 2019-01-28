@@ -36,18 +36,24 @@ typedef uint32_t    u32;
 typedef uint64_t    u64;
 
 #ifdef WIN32
+    #include <direct.h>
     #include <windows.h>
     #include <tlhelp32.h>
+    #define PATHSLASH   '\\'
 #else
     #include <sys/ptrace.h>
 
     #define stricmp strcasecmp
     #define stristr strcasestr
+    #define PATHSLASH   '/'
 #endif
 
 
 
-#define VER                 "0.1.6a"
+#define VER                 "0.1.7"
+#define STD_ERR             std_err()
+#define mystrdup            strdup
+#define PATHSZ              2000
 #define MAX_AND_DISTANCE    3000
 #define SIGNFILE            "signsrch.sig"
 #define SIGNFILEWEB         "http://aluigi.org/mytoolz/signsrch.sig.zip"
@@ -63,6 +69,12 @@ typedef struct {
 } sign_t;
 #pragma pack()
 
+typedef struct {
+    u8      *name;
+    //int     offset; // unused at the moment
+    int     size;
+} files_t;
+
 
 
 sign_t  **sign;
@@ -77,6 +89,9 @@ u8      *filemem        = NULL;
 
 
 
+int check_is_dir(u8 *fname);
+files_t *add_files(u8 *fname, int fsize, int *ret_files);
+int recursive_dir(u8 *filedir, int filedirsz);
 void find_functions(u32 store_offset, int sign_num);
 void myswap16(u16 *ret);
 void myswap32(u32 *ret);
@@ -100,6 +115,9 @@ void help(u8 *arg0);
 
 
 int main(int argc, char *argv[]) {
+    static  u8  bckdir[PATHSZ + 1]  = "",
+                filedir[PATHSZ + 1] = "";
+    files_t *files      = NULL;
     u32     i,
             argi,
             found,
@@ -107,9 +125,12 @@ int main(int argc, char *argv[]) {
             listsign        = 0,
             dumpsign        = 0,
             int3            = -1;
+    int     input_total_files;
     u8      *pid            = NULL,
             *dumpfile       = NULL,
-            *sign_file      = NULL;
+            *sign_file      = NULL,
+            *p;
+    char    **argx          = NULL;
 
     setbuf(stdin,  NULL);
     setbuf(stdout, NULL);
@@ -249,15 +270,53 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
+    argx = calloc(argc + 1, sizeof(char *));
+    if(!argx) std_err();
+    for(i = 0; i < argc; i++) {
+        argx[i] = strdup(argv[i]);
+    }
+    argx[i] = NULL;
+    argv = argx;
+
 redo:
     if(!listsign && !dumpsign) {
         if(pid) {
             filemem = process_read(pid, &filememsz);
             if(!exe_scan) exe_scan = 1;
         } else {
-            if(i == argc) {
+            if(argi == argc) {
                 printf("\nError: you must specify the file to scan\n");
                 exit(1);
+            }
+            if(check_is_dir(argv[argi])) {
+                fprintf(stderr, "- start the scanning of the input folder: %s\n", argv[argi]);
+                getcwd(bckdir, PATHSZ);
+                if(chdir(argv[argi]) < 0) STD_ERR;
+                strcpy(filedir, ".");
+                recursive_dir(filedir, PATHSZ);
+
+                files = add_files(NULL, 0, &input_total_files);
+                if(input_total_files <= 0) {
+                    fprintf(stderr, "\nError: the input folder is empty\n");
+                    exit(1);
+                }
+                chdir(bckdir);
+
+                argv = realloc(argv, (argc + input_total_files + 1) * sizeof(char *));
+                if(!argv) std_err();
+                p = argv[argi]; // will be freed later!
+                for(i = argc - 1; i >= argi; i--) {
+                    argv[i + input_total_files] = argv[i + 1];
+                }
+                argv[argc + input_total_files] = NULL;
+                for(i = 0; i < input_total_files; i++) {
+                    argv[argi + i] = malloc(strlen(p) + 1 + strlen(files[i].name) + 1);
+                    sprintf(argv[argi + i], "%s%c%s", p, PATHSLASH, files[i].name);
+                }
+                argc--; // remove argv[argi]
+                argc += input_total_files;
+                input_total_files = 0;
+                free(p);
             }
             filemem = fd_read(argv[argi], &filememsz);
         }
@@ -360,6 +419,161 @@ redo:
 quit:
     if(sign) free_sign();
     return(0);
+}
+
+
+
+int check_is_dir(u8 *fname) {
+    struct stat xstat;
+
+    if(!fname) return(1);
+    if(stat(fname, &xstat) < 0) return(0);
+    if(!S_ISDIR(xstat.st_mode)) return(0);
+    return(1);
+}
+
+
+
+files_t *add_files(u8 *fname, int fsize, int *ret_files) {
+    static int      filesi  = 0,
+                    filesn  = 0;
+    static files_t  *files  = NULL;
+    files_t         *ret;
+
+    if(ret_files) {
+        *ret_files = filesi;
+        files = realloc(files, sizeof(files_t) * (filesi + 1)); // not needed, but it's ok
+        if(!files) STD_ERR;
+        files[filesi].name   = NULL;
+        //files[filesi].offset = 0;
+        files[filesi].size   = 0;
+        ret    = files;
+        filesi = 0;
+        filesn = 0;
+        files  = NULL;
+        return(ret);
+    }
+
+    if(!fname) return(NULL);
+    //if(filter_in_files && (check_wildcard(fname, filter_in_files) < 0)) return(NULL);
+
+    if(filesi >= filesn) {
+        filesn += 1024;
+        files = realloc(files, sizeof(files_t) * filesn);
+        if(!files) STD_ERR;
+    }
+    files[filesi].name   = mystrdup(fname);
+    //files[filesi].offset = 0;
+    files[filesi].size   = fsize;
+    filesi++;
+    return(NULL);
+}
+
+
+
+#define recursive_dir_skip_path 0
+//#define recursive_dir_skip_path 2
+int recursive_dir(u8 *filedir, int filedirsz) {
+    int     plen,
+            namelen,
+            ret     = -1;
+
+    if(!filedir) return(ret);
+#ifdef WIN32
+    static int      winnt = -1;
+    OSVERSIONINFO   osver;
+    WIN32_FIND_DATA wfd;
+    HANDLE          hFind = INVALID_HANDLE_VALUE;
+
+    if(winnt < 0) {
+        osver.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
+        GetVersionEx(&osver);
+        if(osver.dwPlatformId >= VER_PLATFORM_WIN32_NT) {
+            winnt = 1;
+        } else {
+            winnt = 0;
+        }
+    }
+
+    plen = strlen(filedir);
+    if((plen + 4) >= filedirsz) goto quit;
+    strcpy(filedir + plen, "\\*.*");
+    plen++;
+
+    if(winnt) { // required to avoid problems with Vista and Windows7!
+        hFind = FindFirstFileEx(filedir, FindExInfoStandard, &wfd, FindExSearchNameMatch, NULL, 0);
+    } else {
+        hFind = FindFirstFile(filedir, &wfd);
+    }
+    if(hFind == INVALID_HANDLE_VALUE) goto quit;
+    do {
+        if(!strcmp(wfd.cFileName, ".") || !strcmp(wfd.cFileName, "..")) continue;
+
+        namelen = strlen(wfd.cFileName);
+        if((plen + namelen) >= filedirsz) goto quit;
+        //strcpy(filedir + plen, wfd.cFileName);
+        memcpy(filedir + plen, wfd.cFileName, namelen);
+        filedir[plen + namelen] = 0;
+
+        if(wfd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if(recursive_dir(filedir, filedirsz) < 0) goto quit;
+        } else {
+            add_files(filedir + recursive_dir_skip_path, wfd.nFileSizeLow, NULL);
+        }
+    } while(FindNextFile(hFind, &wfd));
+    ret = 0;
+
+quit:
+    if(hFind != INVALID_HANDLE_VALUE) FindClose(hFind);
+#else
+    struct  stat    xstat;
+    struct  dirent  **namelist;
+    int     n,
+            i;
+
+    n = scandir(filedir, &namelist, NULL, NULL);
+    if(n < 0) {
+        if(stat(filedir, &xstat) < 0) {
+            fprintf(stderr, "**** %s", filedir);
+            STD_ERR;
+        }
+        add_files(filedir + recursive_dir_skip_path, xstat.st_size, NULL);
+        return(0);
+    }
+
+    plen = strlen(filedir);
+    if((plen + 1) >= filedirsz) goto quit;
+    strcpy(filedir + plen, "/");
+    plen++;
+
+    for(i = 0; i < n; i++) {
+        if(!strcmp(namelist[i]->d_name, ".") || !strcmp(namelist[i]->d_name, "..")) continue;
+
+        namelen = strlen(namelist[i]->d_name);
+        if((plen + namelen) >= filedirsz) goto quit;
+        //strcpy(filedir + plen, namelist[i]->d_name);
+        memcpy(filedir + plen, namelist[i]->d_name, namelen);
+        filedir[plen + namelen] = 0;
+
+        if(stat(filedir, &xstat) < 0) {
+            fprintf(stderr, "**** %s", filedir);
+            STD_ERR;
+        }
+        if(S_ISDIR(xstat.st_mode)) {
+            if(recursive_dir(filedir, filedirsz) < 0) goto quit;
+        } else {
+            add_files(filedir + recursive_dir_skip_path, xstat.st_size, NULL);
+        }
+        free(namelist[i]);
+    }
+    ret = 0;
+
+quit:
+    for(; i < n; i++) free(namelist[i]);
+    free(namelist);
+#endif
+    filedir[plen - 1] = 0;
+    return(ret);
 }
 
 
@@ -774,7 +988,7 @@ u8 *process_read(u8 *pname, int *fdlen) {
     u8      *baddr,
             *buff;
 
-    if(!pname && !pname[0] && !pid) return(NULL);
+    if(!pname && !pname[0]) return(NULL);
 
     if(pname) {
         len = 0;
