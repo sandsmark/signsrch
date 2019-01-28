@@ -1,5 +1,5 @@
 /*
-    Copyright 2007 Luigi Auriemma
+    Copyright 2007,2008,2009 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -15,11 +15,11 @@
     along with this program; if not, write to the Free Software
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
-    http://www.gnu.org/licenses/gpl.txt
+    http://www.gnu.org/licenses/gpl-2.0.txt
 */
 
-uint32_t crc32(uint8_t *data, uint32_t size) {
-    static const uint32_t   crctable[] = {
+u32 crc32(u8 *data, u32 size) {
+    static const u32    crctable[] = {
         0x00000000, 0x77073096, 0xee0e612c, 0x990951ba,
         0x076dc419, 0x706af48f, 0xe963a535, 0x9e6495a3,
         0x0edb8832, 0x79dcb8a4, 0xe0d5e91e, 0x97d2d988,
@@ -84,7 +84,7 @@ uint32_t crc32(uint8_t *data, uint32_t size) {
         0xbad03605, 0xcdd70693, 0x54de5729, 0x23d967bf,
         0xb3667a2e, 0xc4614ab8, 0x5d681b02, 0x2a6f2b94,
         0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d };
-    uint32_t    crc = 0xffffffff;
+    u32    crc = 0xffffffff;
 
     while(size--) {
         crc = crctable[*data ^ (crc & 0xff)] ^ (crc >> 8);
@@ -96,11 +96,11 @@ uint32_t crc32(uint8_t *data, uint32_t size) {
 
 
 void signcrc(void) {
-    uint32_t    i,
-                j,
-                *crc;
+    u32     i,
+            j,
+            *crc;
 
-    crc = malloc(sizeof(uint32_t) * signs);
+    crc = malloc(sizeof(u32) * signs);
     if(!crc) std_err();
 
     for(i = 0; i < signs; i++) {

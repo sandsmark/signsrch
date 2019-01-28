@@ -1,5 +1,5 @@
 /*
-    Copyright 2007 Luigi Auriemma
+    Copyright 2007,2008,2009,2010 Luigi Auriemma
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -15,7 +15,7 @@
     along with this program; if not, write to the Free Software
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
 
-    http://www.gnu.org/licenses/gpl.txt
+    http://www.gnu.org/licenses/gpl-2.0.txt
 */
 
 #include <stdio.h>
@@ -26,79 +26,71 @@
 #include <errno.h>
 #include <ctype.h>
 #include "show_dump.h"
+#include "hal_search.c"
+#define MAINPROG
+#include "disasm.h"
+
+typedef uint8_t     u8;
+typedef uint16_t    u16;
+typedef uint32_t    u32;
+typedef uint64_t    u64;
 
 #ifdef WIN32
     #include <windows.h>
     #include <tlhelp32.h>
-
-    #define LOADDLL         hLib = LoadLibrary(fname);                          \
-                            if(!hLib) winerr();
-    #define GETFUNC(x,y)    x  = GetProcAddress(hLib, y);                       \
-                            if(!x) winerr();
-    #define CLOSEDLL        FreeLibrary(hLib);
-    HINSTANCE   hLib;
-
-    void winerr(void);
 #else
     #include <sys/ptrace.h>
 
     #define stricmp strcasecmp
     #define stristr strcasestr
-
-    typedef uint32_t    DWORD;
-
-    #define WINAPI
-    #define LOADDLL         char    *error;                                     \
-                            hLib = dlopen(fname, RTLD_LAZY);                    \
-                            if(!hLib) {                                         \
-                                fprintf(stderr, "\nError: %s\n\n", dlerror());  \
-                                exit(1);                                        \
-                            }
-    #define GETFUNC(x,y)    x  = dlsym(hLib, y);                                \
-                            error = dlerror();                                  \
-                            if(error || !x) {                                   \
-                            fprintf(stderr, "\nError: %s\n\n", error);          \
-                                exit(1);                                        \
-                            }
-    #define CLOSEDLL        dlclose(hLib);
-    void        *hLib;
 #endif
 
 
 
-#define VER                 "0.1.1"
+#define VER                 "0.1.6a"
 #define MAX_AND_DISTANCE    3000
 #define SIGNFILE            "signsrch.sig"
 #define SIGNFILEWEB         "http://aluigi.org/mytoolz/signsrch.sig.zip"
 
 
 
-void free_sign(void);
-uint8_t *fd_read(uint8_t *name, int *fdlen);
-void fd_write(u_char *name, u_char *data, int datasz);
-uint32_t search_file(uint8_t *filebuff, int filesize, uint8_t *pattbuff, int pattsize, int and);
-uint8_t *process_list(uint8_t *myname, DWORD *mypid, DWORD *size);
-uint8_t *process_read(uint8_t *pname, int *fdlen);
-void help(uint8_t *arg0);
-void std_err(void);
-
-
-
 #pragma pack(1)
 typedef struct {
-    uint8_t     *title;
-    uint8_t     *data;
-    uint16_t    size;
-    uint8_t     and;
+    u8      *title;
+    u8      *data;
+    u16     size;
+    u8      and;
 } sign_t;
 #pragma pack()
 
 
 
-int         signs;
-sign_t      **sign;
-uint32_t    rva,
-            sign_alloclen;
+sign_t  **sign;
+u32     sign_alloclen,
+        fixed_rva       = 0;
+int     signs,
+        exe_scan        = 0,
+        filememsz       = 0,
+        alt_endian      = 1,
+        myendian        = 1;    // big endian
+u8      *filemem        = NULL;
+
+
+
+void find_functions(u32 store_offset, int sign_num);
+void myswap16(u16 *ret);
+void myswap32(u32 *ret);
+void myswap64(u64 *ret);
+void std_err(void);
+u8 *get_main_path(u8 *fname, u8 *argv0);
+void free_sign(void);
+u8 *fd_read(u8 *name, int *fdlen);
+void fd_write(u_char *name, u_char *data, int datasz);
+u32 search_file(u8 *pattbuff, int pattsize, int and);
+#include "parse_exe.h"
+u8 *process_list(u8 *myname, DWORD *mypid, DWORD *size);
+u8 *process_read(u8 *pname, int *fdlen);
+void help(u8 *arg0);
 
 
 
@@ -108,17 +100,16 @@ uint32_t    rva,
 
 
 int main(int argc, char *argv[]) {
-    uint32_t    i,
-                argi,
-                found,
-                offset,
-                filesize,
-                listsign   = 0,
-                dumpsign   = 0;
-    uint8_t     *pid       = NULL,
-                *dumpfile  = NULL,
-                *filebuff  = NULL,
-                *sign_file = SIGNFILE;
+    u32     i,
+            argi,
+            found,
+            offset,
+            listsign        = 0,
+            dumpsign        = 0,
+            int3            = -1;
+    u8      *pid            = NULL,
+            *dumpfile       = NULL,
+            *sign_file      = NULL;
 
     setbuf(stdin,  NULL);
     setbuf(stdout, NULL);
@@ -129,6 +120,8 @@ int main(int argc, char *argv[]) {
         "by Luigi Auriemma\n"
         "e-mail: aluigi@autistici.org\n"
         "web:    aluigi.org\n"
+        "  optimized search function from Andrew http://www.team5150.com/~andrew/\n"
+        "  disassembler engine from Oleh Yuschuk\n"
         "\n", stderr);
 
     if(argc < 2) {
@@ -178,6 +171,23 @@ int main(int argc, char *argv[]) {
                 }
                 dumpfile = argv[i];
                 } break;
+            case 'e': {
+                exe_scan        = 1;
+                } break;
+            case 'F': {
+                exe_scan        = 2;
+                } break;
+            case 'E': {
+                exe_scan        = -1;
+                } break;
+            case 'b': {
+                alt_endian      = 0;
+                } break;
+#ifdef WIN32
+            case '3': {
+                sscanf(argv[++i], "%x", &int3);
+                } break;
+#endif
             default: {
                 printf("\nError: wrong argument (%s)\n", argv[i]);
                 exit(1);
@@ -186,38 +196,86 @@ int main(int argc, char *argv[]) {
     }
     argi = i;
 
-    rva           = 0;
     sign          = NULL;
     signs         = 0;
     sign_alloclen = 0;
+    if(*(char *)&myendian) myendian = 0;    // little endian
 
     if(pid && !pid[0]) {
         process_list(NULL, NULL, NULL);
         goto quit;
     }
 
+#ifdef WIN32
+    if(int3 != -1) {
+        STARTUPINFO         si;
+        PROCESS_INFORMATION pi;
+        int     cmdlen;
+        char    *cmd,
+                *error;
+
+        cmdlen = 0;
+        for(i = argi; i < argc; i++) {
+            cmdlen += strlen(argv[i]) + 1;
+        }
+        cmd = malloc(cmdlen + 1);
+        if(!cmd) std_err();
+        cmdlen = 0;
+        for(i = argi; i < argc; i++) {
+            cmdlen += sprintf(cmd + cmdlen, "\"%s\" ", argv[i]);
+        }
+
+        GetStartupInfo(&si);
+        if(!CreateProcess(NULL, cmd, NULL, NULL, FALSE, DETACHED_PROCESS, NULL, NULL, &si, &pi)) {
+            FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM, NULL, GetLastError(), 0, (char *)&error, 0, NULL);
+            printf("\n"
+                "Error: problems during the launching of\n"
+                "       %s\n"
+                "       Windows reported this error: %s\n"
+                "\n", cmd, error);
+            LocalFree(error);
+            exit(1);
+        }
+        for(i = 0; i < 2; i++) {
+            if(i) Sleep(2000);  // in case of packed executables
+            SuspendThread(pi.hThread);
+            WriteProcessMemory(pi.hProcess, (LPVOID)int3, "\xcc", 1, NULL);
+            ResumeThread(pi.hThread);
+        }
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        printf("- process launched with INT3 applied at address %08x\n", int3);
+        return(0);
+    }
+#endif
+
 redo:
     if(!listsign && !dumpsign) {
         if(pid) {
-            filebuff = process_read(pid, &filesize);
+            filemem = process_read(pid, &filememsz);
+            if(!exe_scan) exe_scan = 1;
         } else {
             if(i == argc) {
                 printf("\nError: you must specify the file to scan\n");
                 exit(1);
             }
-            filebuff = fd_read(argv[argi], &filesize);
+            filemem = fd_read(argv[argi], &filememsz);
         }
-        printf("- %u bytes allocated\n", filesize);
+        printf("- %u bytes allocated\n", filememsz);
     }
 
     if(dumpfile) {
-        fd_write(dumpfile, filebuff, filesize);
+        fd_write(dumpfile, filemem, filememsz);
         goto quit;
     }
 
     if(!sign) {
         printf("- load signatures\n");
-        read_cfg(sign_file);
+        if(!sign_file) {
+            read_cfg(get_main_path(SIGNFILE, argv[0]));
+        } else {
+            read_cfg(sign_file);
+        }
         printf(
             "- %u bytes allocated for the signatures\n"
             "- %u signatures in the database\n",
@@ -226,9 +284,9 @@ redo:
         if(!dumpsign) signcrc();
     }
 
-    if(dumpsign) {
+    if(dumpsign > 0) {
         dumpsign--;
-        if((dumpsign < 0) || (dumpsign >= signs)) {
+        if(dumpsign >= signs) {
             printf("\nError: wrong signature number\n");
             exit(1);
         }
@@ -248,10 +306,19 @@ redo:
         goto quit;
     }
 
-    if(filesize > 10000000) {   // more than 10 megabytes
+    if(filememsz > (10 * 1024 * 1024)) {   // more than 10 megabytes
         printf(
             "- WARNING:\n"
             "  the file loaded in memory is very big so the scanning could take many time\n");
+    }
+
+    if(exe_scan > 0) {
+        if(parse_exe() < 0) {
+            printf(
+                "- input is not an executable or is not supported by this tool\n"
+                "  the data will be handled in raw mode\n");
+            exe_scan = 0;
+        }
     }
 
     printf(
@@ -261,16 +328,30 @@ redo:
         "  --------------------------------------------\n");
 
     for(found = i = 0; i < signs; i++) {
-        offset = search_file(filebuff, filesize, sign[i]->data, sign[i]->size, sign[i]->and);
+        offset = search_hashed(filemem, filememsz, sign[i]->data, sign[i]->size, sign[i]->and);
         if(offset != -1) {
-            printf("  %08x %-4u %s\n", rva + offset, i + 1, sign[i]->title);
+            if(exe_scan > 0) offset = file2rva(offset);
+            if(exe_scan < 0) offset += fixed_rva;
+            if(exe_scan == 2) {
+                find_functions(offset, i);
+                fputc('.', stderr);
+            } else {
+                printf("  %08x %-4u %s\n", offset, i + 1, sign[i]->title);
+            }
             found++;
         }
+    }
+    if(exe_scan == 2) {
+        fputc('\n', stderr);
+        find_functions(-1, -1);
     }
 
     printf("\n- %u signatures found in the file\n", found);
 
-    if(filebuff) free(filebuff);
+    if(filemem) free(filemem);
+    if(section) free(section);
+    filemem = NULL;
+    section = NULL;
     if(++argi < argc) {
         fputc('\n', stdout);
         goto redo;
@@ -279,6 +360,157 @@ redo:
 quit:
     if(sign) free_sign();
     return(0);
+}
+
+
+
+void find_functions(u32 store_offset, int sign_num) {
+typedef struct {
+    u32     offset;
+    int     sign_num;
+    int     done;
+} offsets_array_t;
+
+    static  int offsets = 0;
+    static  offsets_array_t *offsets_array  = NULL;
+    t_disasm da;
+    u32     func;
+    int     i,
+            asm_size,
+            section_exe,
+            offset;
+    u8      *addr,
+            *limit;
+
+    lowercase   = 1;
+    extraspace  = 1;
+    showmemsize = 1;
+
+    if(sign_num >= 0) {
+        offsets_array = realloc(offsets_array, (offsets + 1) * sizeof(offsets_array_t));
+        if(!offsets_array) std_err();
+        offsets_array[offsets].offset   = store_offset;
+        offsets_array[offsets].sign_num = sign_num;
+        offsets_array[offsets].done     = 0;
+        offsets++;
+        return;
+    }
+
+    for(section_exe = 0; section_exe < sections; section_exe++) {
+        if(!(section[section_exe].Characteristics & (IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_CNT_CODE))) continue;
+
+        i = section[section_exe].PointerToRawData + section[section_exe].SizeOfRawData;
+        if(i > filememsz) continue;
+        limit = filemem + i;
+        addr  = filemem + section[section_exe].PointerToRawData;
+
+    // from dump2func
+    for(        ; addr < limit; addr += asm_size) {
+        asm_size = Disasm(addr, limit - addr, 0, &da, DISASM_CODE); // DISASM_DATA);
+        if(asm_size <= 0) break;
+
+        func = file2rva(addr - filemem);
+        for(i = 0; i < offsets; i++) {
+            if(offsets_array[i].done) continue;
+            if((func <= offsets_array[i].offset) && ((func + asm_size) >= offsets_array[i].offset)) break;
+        }
+        if(i < offsets) goto set_offset;
+
+        if(!(
+            ((da.cmdtype & C_TYPEMASK) == C_CMD) ||
+            ((da.cmdtype & C_TYPEMASK) == C_PSH) ||
+            ((da.cmdtype & C_TYPEMASK) == C_DAT) ||
+            ((da.cmdtype & C_TYPEMASK) == C_JMP))) {
+            continue;
+        }
+
+        for(i = 0; i < 2; i++) {
+            switch(i) {
+                case 0: offset = da.adrconst;   break;  // mov eax, dword ptr [4*ecx+OFFSET]
+                case 1: offset = da.immconst;   break;  // mov eax, OFFSET
+                default: break;
+            }
+            if(offset <= 0) continue;
+            if(offset <= imagebase) continue;
+            break;
+        }
+        if(i >= 2) continue;
+
+        for(i = 0; i < offsets; i++) {
+            if(offsets_array[i].done) continue;
+            if(offset == offsets_array[i].offset) break;
+        }
+        if(i >= offsets) continue;
+
+set_offset:
+        offsets_array[i].offset = func;
+        offsets_array[i].done   = 1;
+        fputc('.', stderr);
+    }
+    }
+    fputc('\n', stderr);
+
+    for(i = 0; i < offsets; i++) {
+        printf("  %08x %-4u %s\n", offsets_array[i].offset, offsets_array[i].sign_num + 1, sign[offsets_array[i].sign_num]->title);
+    }
+
+    // free the offsets for reusing them later!
+    offsets = 0;
+    // no need of freeing offsets_array
+}
+
+
+
+void myswap16(u16 *ret) {
+    u16     n = *ret;
+    n = (((n & 0xff00) >> 8) |
+         ((n & 0x00ff) << 8));
+    *ret = n;
+}
+
+
+
+void myswap32(u32 *ret) {
+    u32     n = *ret;
+    n = (((n & 0xff000000) >> 24) |
+         ((n & 0x00ff0000) >>  8) |
+         ((n & 0x0000ff00) <<  8) |
+         ((n & 0x000000ff) << 24));
+    *ret = n;
+}
+
+
+
+void myswap64(u64 *ret) {
+    u64     n = *ret;
+    n = (u64)(((u64)(n) & 0xffLL) << (u64)56) |
+        (u64)(((u64)(n) & 0xff00LL) << (u64)40) |
+        (u64)(((u64)(n) & 0xff0000LL) << (u64)24) |
+        (u64)(((u64)(n) & 0xff000000LL) << (u64)8) |
+        (u64)(((u64)(n) & 0xff00000000LL) >> (u64)8) |
+        (u64)(((u64)(n) & 0xff0000000000LL) >> (u64)24) |
+        (u64)(((u64)(n) & 0xff000000000000LL) >> (u64)40) |
+        (u64)(((u64)(n) & 0xff00000000000000LL) >> (u64)56);
+    *ret = n;
+}
+
+
+
+u8 *get_main_path(u8 *fname, u8 *argv0) {
+    static u8   fullname[2000];
+    u8      *p;
+
+#ifdef WIN32
+    GetModuleFileName(NULL, fullname, sizeof(fullname));
+#else
+    sprintf(fullname, "%.*s", sizeof(fullname), argv0);
+#endif
+
+    p = strrchr(fullname, '\\');
+    if(!p) p = strrchr(fullname, '/');
+    if(!p) p = fullname - 1;
+    sprintf(p + 1, "%.*s", sizeof(fullname) - (p - fullname), fname);
+    return(fullname);
 }
 
 
@@ -296,13 +528,13 @@ void free_sign(void) {
 
 
 
-uint8_t *fd_read(uint8_t *name, int *fdlen) {
+u8 *fd_read(u8 *name, int *fdlen) {
     struct  stat    xstat;
     FILE    *fd;
     int     len,
             memsize,
             filesize;
-    uint8_t *buff;
+    u8      *buff;
 
     if(!strcmp(name, "-")) {
         printf("- open %s\n", "stdin");
@@ -311,7 +543,7 @@ uint8_t *fd_read(uint8_t *name, int *fdlen) {
         buff     = NULL;
         for(;;) {
             if(filesize >= memsize) {
-                memsize += 0x7ffff;
+                memsize += 0x80000;
                 buff = realloc(buff, memsize);
                 if(!buff) std_err();
             }
@@ -359,26 +591,26 @@ void fd_write(u_char *name, u_char *data, int datasz) {
 
 
 
-uint32_t search_file(uint8_t *filebuff, int filesize, uint8_t *pattbuff, int pattsize, int and) {
-    uint32_t    offset     = 0,
-                min_offset = -1;
-    uint8_t     *pattlimit,
-                *limit,
-                *patt,
-                *p;
+u32 search_file(u8 *pattbuff, int pattsize, int and) {
+    u32     offset     = 0,
+            min_offset = -1;
+    u8      *pattlimit,
+            *limit,
+            *patt,
+            *p;
 
-    if(filesize < pattsize) return(-1);
+    if(filememsz < pattsize) return(-1);
 
     and >>= 3;
-    limit     = filebuff + filesize - pattsize;
+    limit     = filemem + filememsz - pattsize;
     pattlimit = pattbuff + pattsize - and;
 
     if(and) {
-        p = filebuff;
+        p = filemem;
         for(patt = pattbuff; patt <= pattlimit; patt += and) {
-            for(p = filebuff; p <= limit; p++) {
+            for(p = filemem; p <= limit; p++) {
                 if(!memcmp(p, patt, and)) {
-                    offset = p - filebuff;
+                    offset = p - filemem;
                     if(offset < min_offset) min_offset = offset;
                     if((offset - min_offset) > MAX_AND_DISTANCE) return(-1);
                     break;
@@ -388,9 +620,9 @@ uint32_t search_file(uint8_t *filebuff, int filesize, uint8_t *pattbuff, int pat
         }
         return(min_offset);
     } else {
-        for(p = filebuff; p <= limit; p++) {
+        for(p = filemem; p <= limit; p++) {
             if(!memcmp(p, pattbuff, pattsize)) {
-                return(p - filebuff);
+                return(p - filemem);
             }
         }
     }
@@ -401,7 +633,7 @@ uint32_t search_file(uint8_t *filebuff, int filesize, uint8_t *pattbuff, int pat
 
     // thanx to the extalia.com forum
 
-uint8_t *process_list(uint8_t *myname, DWORD *mypid, DWORD *size) {
+u8 *process_list(u8 *myname, DWORD *mypid, DWORD *size) {
 #ifdef WIN32
     PROCESSENTRY32  Process;
     MODULEENTRY32   Module;
@@ -410,7 +642,7 @@ uint8_t *process_list(uint8_t *myname, DWORD *mypid, DWORD *size) {
     DWORD           retpid = 0;
     int             len;
     BOOL            b;
-    uint8_t         tmpbuff[60],
+    u8              tmpbuff[60],
                     *process_name,
                     *module_name,
                     *module_print,
@@ -494,7 +726,10 @@ uint8_t *process_list(uint8_t *myname, DWORD *mypid, DWORD *size) {
 
 #else
 
-    system("ps -eo pid,cmd");
+    //system("ps -eo pid,cmd");
+    printf("\n"
+        "- use ps to know the pids of your processes, like:\n"
+        "  ps -eo pid,cmd\n");
 
 #endif
 
@@ -503,16 +738,41 @@ uint8_t *process_list(uint8_t *myname, DWORD *mypid, DWORD *size) {
 
 
 
-uint8_t *process_read(uint8_t *pname, int *fdlen) {
+#ifdef WIN32
+void winerr(void) {
+    u8      *message = NULL;
+
+    FormatMessage(
+      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
+      NULL,
+      GetLastError(),
+      0,
+      (char *)&message,
+      0,
+      NULL);
+
+    if(message) {
+        printf("\nError: %s\n", message);
+        LocalFree(message);
+    } else {
+        printf("\nError: unknown Windows error\n");
+    }
+    exit(1);
+}
+#endif
+
+
+
+u8 *process_read(u8 *pname, int *fdlen) {
 
 #ifdef WIN32
 
-    HANDLE      process;
-    DWORD       pid,
-                size;
-    int         len;
-    uint8_t     *baddr,
-                *buff;
+    HANDLE  process;
+    DWORD   pid,
+            size;
+    int     len;
+    u8      *baddr,
+            *buff;
 
     if(!pname && !pname[0] && !pid) return(NULL);
 
@@ -527,12 +787,12 @@ uint8_t *process_read(uint8_t *pname, int *fdlen) {
         printf("\nError: process name/PID not found, use -p\n");
         exit(1);
     }
-    rva = (uint32_t)baddr;
 
+    fixed_rva = (u32)baddr;
     printf(
         "- pid %u\n"
         "- base address 0x%08x\n",
-        (uint32_t)pid, rva);
+        (u32)pid, fixed_rva);
 
     process = OpenProcess(
         PROCESS_VM_READ,
@@ -555,18 +815,21 @@ uint8_t *process_read(uint8_t *pname, int *fdlen) {
 
 #else
 
-    pid_t       pid;
-    uint32_t    size,
-                memsize,
-                data;
-    uint8_t     *buff;
+    pid_t   pid;
+    u32     rva,
+            size,
+            memsize,
+            data;
+    u8      *buff;
 
     pid = atoi(pname);
-    rva = 0x8048000;
+    rva = 0x8048000;    // sorry, not completely supported at the moment
+
+    fixed_rva = rva;
     printf(
         "- pid %u\n"
         "- try using base address 0x%08x\n",
-        pid, rva);
+        pid, fixed_rva);
 
     if(ptrace(PTRACE_ATTACH, pid, NULL, NULL) < 0) std_err();
 
@@ -604,44 +867,32 @@ uint8_t *process_read(uint8_t *pname, int *fdlen) {
 
 
 
-#ifdef WIN32
-void winerr(void) {
-    uint8_t     *message = NULL;
-
-    FormatMessage(
-      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-      NULL,
-      GetLastError(),
-      0,
-      (char *)&message,
-      0,
-      NULL);
-
-    if(message) {
-        printf("\nError: %s\n", message);
-        LocalFree(message);
-    } else {
-        printf("\nError: unknown Windows error\n");
-    }
-    exit(1);
-}
-#endif
-
-
-
-void help(uint8_t *arg0) {
+void help(u8 *arg0) {
     printf("\n"
         "Usage: %s [options] [file1] ... [fileN]\n"
         "\n"
-        "-l        list available signatures in the database\n"
-        "-L NUM    dumps the data of the signature NUM\n"
-        "-s FILE   use the signature file FILE ("SIGNFILE")\n"
-        "-p        list the running processes\n"
-        "-P PID    use the process/module identified by its pid or part of name/path\n"
-        "-d FILE   dump the process memory (like -P) in FILE\n"
+        "Options:\n"
+        "-l       list the available signatures in the database\n"
+        "-L NUM   show the data of the signature NUM\n"
+        "-s FILE  use the signature file FILE ("SIGNFILE")\n"
+        "-p       list the running processes and their modules\n"
+        "-P PID   use the process/module identified by its pid or part of name/path\n"
+        "-d FILE  dump the process memory (like -P) in FILE\n"
+        "-e       consider the input file as an executable (PE/ELF), can be useful\n"
+        "         because will show the rva addresses instead of the file offsets\n"
+        "-F       as above but returns the address of the first instruction that points\n"
+        "         to the found signature, for example where is used the AES Td0 table,\n"
+        "         something like an automatic \"Find references\" of Ollydbg\n"
+        "-E       disable the automatic executable parsing used with -P\n"
+        "-b       disable the scanning of the big endian versions of the signatures\n"
+#ifdef WIN32
+        "-3 OFF   execute the file applying an INT3 (0xcc) byte at the specified\n"
+        "         offset (rva memory address, not file offset!) in hexadecimal notation\n"
+        "         and remember to have a debugger set as \"Just-in-time\" debugger\n"
+#endif
         "\n"
         "use - for stdin\n"
-        "updated "SIGNFILE": "SIGNFILEWEB"\n"
+        "URL for the updated "SIGNFILE": "SIGNFILEWEB"\n"
         "\n", arg0);
     exit(1);
 }
